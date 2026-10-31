@@ -1,36 +1,53 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	"meto/internal/config"
+	"meto/internal/database"
+	"meto/internal/httpapi"
 )
 
 func main() {
-	addr := os.Getenv("HTTP_ADDR")
-	if addr == "" {
-		addr = ":8080"
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx); err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
 	}
 
-	router := gin.Default()
-
-	if err := router.SetTrustedProxies(nil); err != nil {
-		log.Fatal(err)
+	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	pool, err := database.Open(connectCtx, cfg.DatabaseURL)
+	cancel()
+	if err != nil {
+		return err
 	}
+	defer pool.Close()
+	log.Print("database connected")
 
-	api := router.Group("/api/v1")
-	api.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "ok",
-			"service": "meto-api",
-		})
-	})
+	router, err := httpapi.NewRouter(pool)
+	if err != nil {
+		return err
+	}
 
 	server := &http.Server{
-		Addr:              addr,
+		Addr:              cfg.HTTPAddr,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -38,8 +55,28 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	log.Printf("meto API listening on %s", addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+	serveErr := make(chan error, 1)
+	go func() {
+		log.Printf("meto API listening on %s", cfg.HTTPAddr)
+		serveErr <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serveErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve HTTP: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		log.Print("shutting down API server")
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		_ = server.Close()
+		return fmt.Errorf("shutdown HTTP server: %w", err)
+	}
+	log.Print("API server stopped")
+	return nil
 }
