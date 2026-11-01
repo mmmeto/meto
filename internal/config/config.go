@@ -10,8 +10,9 @@ import (
 )
 
 type Config struct {
-	HTTPAddr    string
-	DatabaseURL string
+	HTTPAddr          string
+	DatabaseURL       string
+	FirebaseProjectID string
 }
 
 func Load() (Config, error) {
@@ -20,8 +21,9 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:    strings.TrimSpace(os.Getenv("HTTP_ADDR")),
-		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		HTTPAddr:          strings.TrimSpace(os.Getenv("HTTP_ADDR")),
+		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		FirebaseProjectID: strings.TrimSpace(os.Getenv("FIREBASE_PROJECT_ID")),
 	}
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = ":8080"

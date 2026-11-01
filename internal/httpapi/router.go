@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"meto/internal/auth"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -13,7 +15,10 @@ type Pinger interface {
 	Ping(context.Context) error
 }
 
-func NewRouter(db Pinger) (*gin.Engine, error) {
+func NewRouter(db Pinger, verifier auth.Verifier, users UserStore) (*gin.Engine, error) {
+	if db == nil || verifier == nil || users == nil {
+		return nil, fmt.Errorf("database, auth verifier and user store are required")
+	}
 	router := gin.Default()
 	if err := router.SetTrustedProxies(nil); err != nil {
 		return nil, fmt.Errorf("configure trusted proxies: %w", err)
@@ -43,5 +48,8 @@ func NewRouter(db Pinger) (*gin.Engine, error) {
 		})
 	})
 
+	protected := api.Group("", authenticate(verifier))
+	protected.POST("/auth/login", loginHandler(users))
+	protected.GET("/users/me", meHandler(users))
 	return router, nil
 }

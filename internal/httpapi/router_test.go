@@ -17,7 +17,7 @@ func (f pingerFunc) Ping(ctx context.Context) error {
 }
 
 func TestHealthDoesNotQueryDatabase(t *testing.T) {
-	router, err := NewRouter(pingerFunc(func(context.Context) error {
+	router, err := newStatusRouter(pingerFunc(func(context.Context) error {
 		t.Fatal("health must not query the database")
 		return nil
 	}))
@@ -43,7 +43,7 @@ func TestReadiness(t *testing.T) {
 		{"unavailable", errors.New("private connection details"), http.StatusServiceUnavailable, "not_ready", "unavailable"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			router, err := NewRouter(pingerFunc(func(context.Context) error { return tt.dbErr }))
+			router, err := newStatusRouter(pingerFunc(func(context.Context) error { return tt.dbErr }))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -64,7 +64,7 @@ func TestReadiness(t *testing.T) {
 }
 
 func TestReadinessPropagatesRequestDeadline(t *testing.T) {
-	router, err := NewRouter(pingerFunc(func(ctx context.Context) error {
+	router, err := newStatusRouter(pingerFunc(func(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}))

@@ -11,9 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	"meto/internal/auth"
 	"meto/internal/config"
 	"meto/internal/database"
 	"meto/internal/httpapi"
+	"meto/internal/user"
 )
 
 func main() {
@@ -31,6 +33,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	verifier, err := auth.NewFirebaseVerifier(ctx, cfg.FirebaseProjectID)
+	if err != nil {
+		return err
+	}
 
 	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	pool, err := database.Open(connectCtx, cfg.DatabaseURL)
@@ -41,7 +47,7 @@ func run(ctx context.Context) error {
 	defer pool.Close()
 	log.Print("database connected")
 
-	router, err := httpapi.NewRouter(pool)
+	router, err := httpapi.NewRouter(pool, verifier, user.NewRepository(pool))
 	if err != nil {
 		return err
 	}
