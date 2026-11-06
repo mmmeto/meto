@@ -6,7 +6,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+const (
+	uniqueViolationCode      = "23505"
+	usernameUniqueConstraint = "users_username_key"
 )
 
 var ErrNotFound = errors.New("user not found")
@@ -67,6 +73,30 @@ func (r *Repository) SyncLogin(ctx context.Context, input Login) (Profile, error
 
 func (r *Repository) GetByID(ctx context.Context, id string) (Profile, error) {
 	return scanProfile(r.pool.QueryRow(ctx, "SELECT "+profileColumns+" FROM users WHERE id = $1", id))
+}
+
+// CompleteOnboarding은 온보딩 전인 사용자만 갱신하며, 해당 행이 없으면 ErrNotFound를 반환합니다.
+// 사용자명 중복은 조회 후 저장하지 않고 UNIQUE 제약으로 판정해 동시 요청에도 한 명만 성공합니다.
+func (r *Repository) CompleteOnboarding(ctx context.Context, id string, input Onboarding) (Profile, error) {
+	profile, err := scanProfile(r.pool.QueryRow(ctx, `
+		UPDATE users SET
+			display_name = $2,
+			username = $3,
+			default_visibility = $4,
+			photo_storage_path = COALESCE($5, photo_storage_path),
+			terms_accepted_version = $6,
+			terms_accepted_at = NOW(),
+			onboarding_completed = TRUE,
+			updated_at = NOW()
+		WHERE id = $1 AND NOT onboarding_completed
+		RETURNING `+profileColumns,
+		id, input.DisplayName, input.Username, input.DefaultVisibility,
+		input.PhotoStoragePath, input.TermsVersion))
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == uniqueViolationCode && pgErr.ConstraintName == usernameUniqueConstraint {
+		return Profile{}, ErrUsernameTaken
+	}
+	return profile, err
 }
 
 func scanProfile(row pgx.Row) (Profile, error) {

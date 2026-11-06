@@ -14,11 +14,23 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const identityKey = "meto.authenticatedIdentity"
+const (
+	identityKey        = "meto.authenticatedIdentity"
+	maxProfileBodySize = 16 * 1024
+)
 
-type UserStore interface {
+type UserService interface {
 	SyncLogin(context.Context, user.Login) (user.Profile, error)
 	GetByID(context.Context, string) (user.Profile, error)
+	CompleteOnboarding(context.Context, string, user.Onboarding) (user.Profile, error)
+}
+
+type onboardingRequest struct {
+	DisplayName       string  `json:"displayName"`
+	Username          string  `json:"username"`
+	DefaultVisibility string  `json:"defaultVisibility"`
+	TermsVersion      string  `json:"termsVersion"`
+	PhotoStoragePath  *string `json:"photoStoragePath"`
 }
 
 func authenticate(verifier auth.Verifier) gin.HandlerFunc {
@@ -63,7 +75,27 @@ func apiError(c *gin.Context, status int, code, message string) {
 	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code, "message": message}})
 }
 
-func loginHandler(users UserStore) gin.HandlerFunc {
+// userError는 사용자 도메인 오류를 HTTP 응답으로 바꾸는 유일한 지점입니다.
+// 알 수 없는 오류의 내용은 로그에만 남기고 unavailable 문구로 응답합니다.
+func userError(c *gin.Context, err error, unavailable string) {
+	switch {
+	case errors.Is(err, user.ErrNotFound):
+		apiError(c, http.StatusNotFound, "user_not_found", "로그인 API로 사용자 등록을 먼저 완료해주세요.")
+	case errors.Is(err, user.ErrInvalidProfile):
+		apiError(c, http.StatusBadRequest, "invalid_profile", "프로필 입력값을 확인해주세요.")
+	case errors.Is(err, user.ErrUsernameTaken):
+		apiError(c, http.StatusConflict, "username_taken", "이미 사용 중인 사용자 ID예요. 다른 ID를 정해주세요.")
+	case errors.Is(err, user.ErrOnboardingCompleted):
+		apiError(c, http.StatusConflict, "onboarding_completed", "이미 온보딩을 완료했어요.")
+	case errors.Is(err, user.ErrTermsOutdated):
+		apiError(c, http.StatusConflict, "terms_outdated", "최신 약관에 다시 동의해주세요.")
+	default:
+		log.Printf("%s %s: %v", c.Request.Method, c.FullPath(), err)
+		apiError(c, http.StatusServiceUnavailable, "database_unavailable", unavailable)
+	}
+}
+
+func loginHandler(users UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		identity := c.MustGet(identityKey).(auth.Identity)
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
@@ -73,27 +105,47 @@ func loginHandler(users UserStore) gin.HandlerFunc {
 			DisplayName: identity.DisplayName, PhotoURL: identity.PhotoURL,
 		})
 		if err != nil {
-			log.Printf("sync login user: %v", err)
-			apiError(c, http.StatusServiceUnavailable, "database_unavailable", "사용자 정보를 저장하지 못했어요.")
+			userError(c, err, "사용자 정보를 저장하지 못했어요.")
 			return
 		}
 		c.JSON(http.StatusOK, profile)
 	}
 }
 
-func meHandler(users UserStore) gin.HandlerFunc {
+func meHandler(users UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		identity := c.MustGet(identityKey).(auth.Identity)
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 		defer cancel()
 		profile, err := users.GetByID(ctx, identity.ID)
-		if errors.Is(err, user.ErrNotFound) {
-			apiError(c, http.StatusNotFound, "user_not_found", "로그인 API로 사용자 등록을 먼저 완료해주세요.")
+		if err != nil {
+			userError(c, err, "사용자 정보를 불러오지 못했어요.")
 			return
 		}
+		c.JSON(http.StatusOK, profile)
+	}
+}
+
+func onboardingHandler(users UserService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		identity := c.MustGet(identityKey).(auth.Identity)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxProfileBodySize)
+		var request onboardingRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			userError(c, user.ErrInvalidProfile, "")
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		profile, err := users.CompleteOnboarding(ctx, identity.ID, user.Onboarding{
+			DisplayName:       request.DisplayName,
+			Username:          request.Username,
+			DefaultVisibility: request.DefaultVisibility,
+			TermsVersion:      request.TermsVersion,
+			PhotoStoragePath:  request.PhotoStoragePath,
+		})
 		if err != nil {
-			log.Printf("get current user: %v", err)
-			apiError(c, http.StatusServiceUnavailable, "database_unavailable", "사용자 정보를 불러오지 못했어요.")
+			userError(c, err, "프로필을 저장하지 못했어요.")
 			return
 		}
 		c.JSON(http.StatusOK, profile)

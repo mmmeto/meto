@@ -131,8 +131,9 @@ SQL 파일의 `-- +goose Down`에는 되돌릴 SQL을 기록하지만 현재 실
 | --- | --- |
 | `POST /api/v1/auth/login` | 검증된 UID로 사용자 생성 또는 로그인 정보 갱신 후 프로필 반환 |
 | `GET /api/v1/users/me` | 검증된 UID에 해당하는 PostgreSQL 프로필 조회 |
+| `POST /api/v1/users/me/onboarding` | 이름·사용자명·공개 범위·약관 동의를 저장하고 온보딩 완료 |
 
-두 API 모두 다음 헤더가 필요합니다.
+세 API 모두 다음 헤더가 필요합니다.
 
 ```text
 Authorization: Bearer <Firebase ID token>
@@ -180,6 +181,45 @@ curl http://localhost:8080/api/v1/users/me \
 | 404 | 인증은 성공했지만 아직 로그인 API로 등록하지 않은 사용자 |
 | 503 | 공개 인증서 조회 또는 DB 처리 실패 |
 
+## 온보딩 API
+
+로그인 API로 사용자를 등록한 뒤 호출합니다. 대상 사용자는 요청 본문이 아니라 검증된 토큰으로 결정합니다.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/users/me/onboarding \
+  -H "Authorization: Bearer $FIREBASE_ID_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"displayName":"지수","username":"jisu_01","defaultVisibility":"title_visible","termsVersion":"2026-10-16"}'
+```
+
+| 필드 | 규칙 |
+| --- | --- |
+| `displayName` | 필수. 앞뒤 공백 제거 후 1~80자, 줄바꿈·제어문자 불가 |
+| `username` | 필수. 앞뒤 공백 제거·소문자 변환 후 소문자·숫자·밑줄 3~20자 |
+| `defaultVisibility` | 필수. `hidden`, `time_only`, `title_visible`, `full_visible` 중 하나 |
+| `termsVersion` | 필수. 서버의 `CurrentTermsVersion`과 같아야 함 |
+| `photoStoragePath` | 선택. `users/<본인 UID>/profile/avatar.jpg`만 허용, 생략하면 기존 값 유지 |
+
+사진 URL은 다른 사용자의 앱이 불러오는 값이므로 입력으로 받지 않고 기존 값을 유지합니다.
+사용자명 중복은 UNIQUE 제약으로 판정하므로 동시에 요청해도 한 명만 성공합니다.
+온보딩을 마친 뒤 같은 사용자명으로 다시 요청하면 응답을 받지 못한 앱의 재시도로 보고,
+저장된 프로필을 변경하지 않은 채 HTTP 200으로 반환합니다.
+다른 사용자명으로 요청하면 `onboarding_completed`로 거절합니다.
+프로필 수정은 이 API로 할 수 없습니다.
+
+| 상태 코드 | `error.code` | 의미 |
+| --- | --- | --- |
+| 200 | | 온보딩 완료 또는 같은 내용의 재시도 |
+| 400 | `invalid_profile` | 본문 형식 오류 또는 입력 규칙 위반 |
+| 401 | `unauthorized` | 토큰 누락·형식 오류·검증 실패 |
+| 404 | `user_not_found` | 로그인 API로 등록하지 않은 사용자 |
+| 409 | `username_taken` | 다른 사용자가 쓰는 사용자명 |
+| 409 | `onboarding_completed` | 이미 다른 사용자명으로 온보딩 완료 |
+| 409 | `terms_outdated` | 서버의 최신 약관 버전과 다름 |
+| 503 | `database_unavailable` | DB 처리 실패 |
+
+## 오류 응답
+
 오류는 `{"error":{"code":"...","message":"..."}}` 형태이며 토큰과 내부 오류 내용은 응답에 넣지 않습니다.
 인증 확인에는 최대 5초, 사용자 DB 처리에는 최대 3초 제한을 적용하고 요청 취소도 전달합니다.
 
@@ -192,7 +232,9 @@ internal/config/config.go      환경변수와 .env 로딩
 internal/auth/                 로그인 토큰 검증 인터페이스와 Firebase 구현
 internal/database/postgres.go   pgx 커넥션 풀과 초기 연결 확인
 internal/httpapi/router.go      HTTP 라우팅과 상태 확인
-internal/httpapi/users.go       인증 미들웨어와 로그인·내 프로필 핸들러
+internal/httpapi/users.go       인증 미들웨어, 사용자 API 핸들러, 도메인 오류의 HTTP 변환
+internal/user/profile.go        프로필 입력 규칙과 도메인 오류
+internal/user/service.go        온보딩 등 사용자 비즈니스 규칙
 internal/user/repository.go     PostgreSQL 사용자 저장·조회
 migrations/                    버전별 DB 테이블 변경 SQL
 compose.yaml                   로컬 PostgreSQL 실행 설정

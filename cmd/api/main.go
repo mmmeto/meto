@@ -47,7 +47,7 @@ func run(ctx context.Context) error {
 	defer pool.Close()
 	log.Print("database connected")
 
-	router, err := httpapi.NewRouter(pool, verifier, user.NewRepository(pool))
+	router, err := httpapi.NewRouter(pool, verifier, user.NewService(user.NewRepository(pool)))
 	if err != nil {
 		return err
 	}

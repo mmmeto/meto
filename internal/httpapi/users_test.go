@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,32 +22,40 @@ func (f verifierFunc) Verify(ctx context.Context, token string) (auth.Identity, 
 	return f(ctx, token)
 }
 
-type userStoreStub struct {
-	sync func(context.Context, user.Login) (user.Profile, error)
-	get  func(context.Context, string) (user.Profile, error)
+type userServiceStub struct {
+	sync    func(context.Context, user.Login) (user.Profile, error)
+	get     func(context.Context, string) (user.Profile, error)
+	onboard func(context.Context, string, user.Onboarding) (user.Profile, error)
 }
 
-func (s userStoreStub) SyncLogin(ctx context.Context, input user.Login) (user.Profile, error) {
+func (s userServiceStub) SyncLogin(ctx context.Context, input user.Login) (user.Profile, error) {
 	if s.sync == nil {
 		panic("unexpected user write")
 	}
 	return s.sync(ctx, input)
 }
 
-func (s userStoreStub) GetByID(ctx context.Context, id string) (user.Profile, error) {
+func (s userServiceStub) GetByID(ctx context.Context, id string) (user.Profile, error) {
 	if s.get == nil {
 		panic("unexpected user read")
 	}
 	return s.get(ctx, id)
 }
 
+func (s userServiceStub) CompleteOnboarding(ctx context.Context, id string, input user.Onboarding) (user.Profile, error) {
+	if s.onboard == nil {
+		panic("unexpected onboarding")
+	}
+	return s.onboard(ctx, id, input)
+}
+
 func newStatusRouter(db Pinger) (*gin.Engine, error) {
 	return NewRouter(db, verifierFunc(func(context.Context, string) (auth.Identity, error) {
 		return auth.Identity{}, auth.ErrInvalidToken
-	}), userStoreStub{})
+	}), userServiceStub{})
 }
 
-func userTestRouter(t *testing.T, verifier auth.Verifier, users UserStore) *gin.Engine {
+func userTestRouter(t *testing.T, verifier auth.Verifier, users UserService) *gin.Engine {
 	t.Helper()
 	router, err := NewRouter(pingerFunc(func(context.Context) error { return nil }), verifier, users)
 	if err != nil {
@@ -63,11 +72,12 @@ func TestProtectedRoutesRejectBadAuthorization(t *testing.T) {
 	for _, route := range []struct{ method, path string }{
 		{http.MethodPost, "/api/v1/auth/login"},
 		{http.MethodGet, "/api/v1/users/me"},
+		{http.MethodPost, "/api/v1/users/me/onboarding"},
 	} {
 		for _, header := range []string{"", "Basic abc", "Bearer", "Bearer a b", "Bearer " + strings.Repeat("x", 17000), "Bearer invalid"} {
 			router := userTestRouter(t, verifierFunc(func(context.Context, string) (auth.Identity, error) {
 				return auth.Identity{}, auth.ErrInvalidToken
-			}), userStoreStub{})
+			}), userServiceStub{})
 			request := httptest.NewRequest(route.method, route.path, nil)
 			if header != "" {
 				request.Header.Set("Authorization", header)
@@ -82,7 +92,7 @@ func TestProtectedRoutesRejectBadAuthorization(t *testing.T) {
 }
 
 func TestLoginUsesVerifiedClaimsInsteadOfRequestBody(t *testing.T) {
-	router := userTestRouter(t, verifierFunc(validVerifier), userStoreStub{
+	router := userTestRouter(t, verifierFunc(validVerifier), userServiceStub{
 		sync: func(_ context.Context, input user.Login) (user.Profile, error) {
 			if input.ID != "verified-user" || input.DisplayName != "Verified Name" {
 				t.Fatalf("untrusted login identity: %+v", input)
@@ -101,7 +111,7 @@ func TestLoginUsesVerifiedClaimsInsteadOfRequestBody(t *testing.T) {
 }
 
 func TestMeOnlyReadsVerifiedUser(t *testing.T) {
-	router := userTestRouter(t, verifierFunc(validVerifier), userStoreStub{
+	router := userTestRouter(t, verifierFunc(validVerifier), userServiceStub{
 		get: func(_ context.Context, id string) (user.Profile, error) {
 			if id != "verified-user" {
 				t.Fatalf("attempted to read a different user: %s", id)
@@ -137,7 +147,7 @@ func TestUserAPIErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			router := userTestRouter(t, verifierFunc(func(context.Context, string) (auth.Identity, error) {
 				return auth.Identity{ID: "verified-user"}, tt.verifyErr
-			}), userStoreStub{get: func(context.Context, string) (user.Profile, error) {
+			}), userServiceStub{get: func(context.Context, string) (user.Profile, error) {
 				return user.Profile{}, tt.storeErr
 			}})
 			request := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
@@ -151,8 +161,93 @@ func TestUserAPIErrors(t *testing.T) {
 	}
 }
 
+func TestOnboardingUsesVerifiedUserAndRequestBody(t *testing.T) {
+	router := userTestRouter(t, verifierFunc(validVerifier), userServiceStub{
+		onboard: func(_ context.Context, id string, input user.Onboarding) (user.Profile, error) {
+			if id != "verified-user" {
+				t.Fatalf("onboarded a different user: %s", id)
+			}
+			if input.DisplayName != "지수" || input.Username != "jisu_01" || input.DefaultVisibility != "hidden" ||
+				input.TermsVersion != "v1" || input.PhotoStoragePath == nil || *input.PhotoStoragePath != "path" {
+				t.Fatalf("request body was not passed on: %+v", input)
+			}
+			return user.Profile{ID: id, OnboardingCompleted: true}, nil
+		},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/onboarding?id=someone-else", strings.NewReader(
+		`{"id":"someone-else","displayName":"지수","username":"jisu_01","defaultVisibility":"hidden","termsVersion":"v1","photoStoragePath":"path"}`))
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	var profile user.Profile
+	if err := json.Unmarshal(response.Body.Bytes(), &profile); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || profile.ID != "verified-user" || !profile.OnboardingCompleted {
+		t.Fatalf("unexpected onboarding response: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestOnboardingRejectsUnreadableBody(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty":      "",
+		"malformed":  "{",
+		"wrong type": `{"username":1}`,
+		"too large":  `{"displayName":"` + strings.Repeat("x", maxProfileBodySize) + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			router := userTestRouter(t, verifierFunc(validVerifier), userServiceStub{})
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/onboarding", strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer valid-token")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("got %d, want 400: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestOnboardingErrors(t *testing.T) {
+	for _, tt := range []struct {
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{user.ErrInvalidProfile, http.StatusBadRequest, "invalid_profile"},
+		{user.ErrNotFound, http.StatusNotFound, "user_not_found"},
+		{user.ErrUsernameTaken, http.StatusConflict, "username_taken"},
+		{user.ErrOnboardingCompleted, http.StatusConflict, "onboarding_completed"},
+		{user.ErrTermsOutdated, http.StatusConflict, "terms_outdated"},
+		{fmt.Errorf("wrapped: %w", user.ErrUsernameTaken), http.StatusConflict, "username_taken"},
+		{errors.New("private connection details"), http.StatusServiceUnavailable, "database_unavailable"},
+	} {
+		t.Run(tt.wantCode, func(t *testing.T) {
+			router := userTestRouter(t, verifierFunc(validVerifier), userServiceStub{
+				onboard: func(context.Context, string, user.Onboarding) (user.Profile, error) {
+					return user.Profile{}, tt.err
+				},
+			})
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/onboarding", strings.NewReader("{}"))
+			request.Header.Set("Authorization", "Bearer valid-token")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			var body struct {
+				Error struct{ Code string } `json:"error"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != tt.wantStatus || body.Error.Code != tt.wantCode ||
+				strings.Contains(response.Body.String(), "private connection details") {
+				t.Fatalf("unexpected error response: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestDuplicateAuthorizationHeadersAreRejected(t *testing.T) {
-	router := userTestRouter(t, verifierFunc(validVerifier), userStoreStub{})
+	router := userTestRouter(t, verifierFunc(validVerifier), userServiceStub{})
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
 	request.Header.Add("Authorization", "Bearer token-one")
 	request.Header.Add("Authorization", "Bearer token-two")
@@ -169,7 +264,7 @@ func TestAuthenticationPropagatesRequestCancellation(t *testing.T) {
 			t.Fatal("request cancellation did not reach the verifier")
 		}
 		return auth.Identity{}, auth.ErrUnavailable
-	}), userStoreStub{})
+	}), userServiceStub{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil).WithContext(ctx)

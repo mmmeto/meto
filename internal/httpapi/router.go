@@ -15,9 +15,9 @@ type Pinger interface {
 	Ping(context.Context) error
 }
 
-func NewRouter(db Pinger, verifier auth.Verifier, users UserStore) (*gin.Engine, error) {
+func NewRouter(db Pinger, verifier auth.Verifier, users UserService) (*gin.Engine, error) {
 	if db == nil || verifier == nil || users == nil {
-		return nil, fmt.Errorf("database, auth verifier and user store are required")
+		return nil, fmt.Errorf("database, auth verifier and user service are required")
 	}
 	router := gin.Default()
 	if err := router.SetTrustedProxies(nil); err != nil {
@@ -51,5 +51,6 @@ func NewRouter(db Pinger, verifier auth.Verifier, users UserStore) (*gin.Engine,
 	protected := api.Group("", authenticate(verifier))
 	protected.POST("/auth/login", loginHandler(users))
 	protected.GET("/users/me", meHandler(users))
+	protected.POST("/users/me/onboarding", onboardingHandler(users))
 	return router, nil
 }
