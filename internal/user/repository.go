@@ -50,7 +50,7 @@ const profileColumns = `id, email, display_name, COALESCE(username, id), photo_u
 	terms_accepted_at, last_login_at, created_at, updated_at`
 
 func (r *Repository) SyncLogin(ctx context.Context, input Login) (Profile, error) {
-	// Only trusted token claims reach this query. A completed profile stays under user control.
+	// 검증된 토큰의 정보만 사용하며, 온보딩을 완료한 사용자의 프로필은 유지합니다.
 	return scanProfile(r.pool.QueryRow(ctx, `
 		INSERT INTO users (id, email, display_name, photo_url, last_login_at)
 		VALUES ($1, $2, $3, $4, NOW())

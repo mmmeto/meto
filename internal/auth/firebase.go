@@ -21,11 +21,11 @@ func NewFirebaseVerifier(ctx context.Context, projectID string) (*FirebaseVerifi
 	if projectID == "" {
 		return nil, errors.New("FIREBASE_PROJECT_ID is required to start the API server")
 	}
-	// Emulator tokens are unsigned. This API only accepts production ID tokens.
+	// 에뮬레이터 토큰에는 서명이 없으므로, 실제 서비스에서 발급한 ID 토큰만 허용합니다.
 	if os.Getenv("FIREBASE_AUTH_EMULATOR_HOST") != "" {
 		return nil, errors.New("FIREBASE_AUTH_EMULATOR_HOST must be unset for this API server")
 	}
-	// ID token verification only needs Google's public certificates, not admin credentials.
+	// ID 토큰 검증에는 관리자 자격증명 대신 Google의 공개 인증서만 필요합니다.
 	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: projectID}, option.WithoutAuthentication())
 	if err != nil {
 		return nil, fmt.Errorf("initialize Firebase token verification: %w", err)

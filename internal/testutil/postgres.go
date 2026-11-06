@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Postgres creates an isolated schema in an explicitly selected test database.
+// Postgres는 명시적으로 지정한 테스트 DB 안에 독립된 스키마를 만듭니다.
 func Postgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	rawURL := os.Getenv("METO_TEST_DATABASE_URL")

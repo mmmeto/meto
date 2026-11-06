@@ -42,7 +42,7 @@ func TestFirebaseVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Only the SDK's public certificate fetch is replaced; JWT verification remains real.
+	// SDK의 공개 인증서 조회만 대체하고, JWT 서명 검증은 실제 로직으로 수행합니다.
 	previous := http.DefaultTransport
 	http.DefaultTransport = &http.Transport{
 		DialTLSContext: func(_ context.Context, _, address string) (net.Conn, error) {

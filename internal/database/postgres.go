@@ -19,7 +19,7 @@ func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create database pool: %w", err)
 	}
-	// Creating a pool does not establish a connection. Verify it before serving HTTP.
+	// 풀 생성만으로 연결되지는 않으므로, HTTP 요청을 받기 전에 실제 연결을 확인합니다.
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("connect to database: %w", err)

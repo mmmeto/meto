@@ -68,7 +68,7 @@ func TestMigrations(t *testing.T) {
 	if err := migrate(ctx, testURL, "up", migrations); err != nil {
 		t.Fatal(err)
 	}
-	// Reapplying must skip the CREATE TABLE instead of running it again.
+	// 재실행 시 CREATE TABLE을 다시 실행하지 않고 이미 적용한 변경을 건너뛰어야 합니다.
 	if err := migrate(ctx, testURL, "up", migrations); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestMigrations(t *testing.T) {
 	if visibility != "time_only" || permission != "unknown" || completed {
 		t.Fatalf("unexpected defaults: %q %q %v", visibility, permission, completed)
 	}
-	// Multiple users may be awaiting profile setup without reserving a username.
+	// 프로필 설정 전에는 여러 사용자가 사용자명 없이 대기할 수 있어야 합니다.
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id) VALUES ('pending-user')`); err != nil {
 		t.Fatal(err)
 	}
