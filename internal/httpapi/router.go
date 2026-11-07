@@ -48,9 +48,13 @@ func NewRouter(db Pinger, verifier auth.Verifier, users UserService) (*gin.Engin
 		})
 	})
 
+	api.GET("/usernames/:username/availability", usernameAvailabilityHandler(users))
+
 	protected := api.Group("", authenticate(verifier))
 	protected.POST("/auth/login", loginHandler(users))
 	protected.GET("/users/me", meHandler(users))
+	protected.PUT("/users/me", updateProfileHandler(users))
 	protected.POST("/users/me/onboarding", onboardingHandler(users))
+	protected.PUT("/users/me/calendar-import", calendarImportHandler(users))
 	return router, nil
 }

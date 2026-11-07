@@ -10,6 +10,9 @@ import (
 type storeStub struct {
 	complete func(context.Context, string, Onboarding) (Profile, error)
 	get      func(context.Context, string) (Profile, error)
+	update   func(context.Context, string, ProfileUpdate) (Profile, error)
+	calendar func(context.Context, string, CalendarImport) (Profile, error)
+	exists   func(context.Context, string) (bool, error)
 }
 
 func (s storeStub) SyncLogin(context.Context, Login) (Profile, error) {
@@ -28,6 +31,27 @@ func (s storeStub) CompleteOnboarding(ctx context.Context, id string, input Onbo
 		panic("unexpected write")
 	}
 	return s.complete(ctx, id, input)
+}
+
+func (s storeStub) UpdateProfile(ctx context.Context, id string, input ProfileUpdate) (Profile, error) {
+	if s.update == nil {
+		panic("unexpected profile update")
+	}
+	return s.update(ctx, id, input)
+}
+
+func (s storeStub) UpdateCalendarImport(ctx context.Context, id string, input CalendarImport) (Profile, error) {
+	if s.calendar == nil {
+		panic("unexpected calendar update")
+	}
+	return s.calendar(ctx, id, input)
+}
+
+func (s storeStub) UsernameExists(ctx context.Context, username string) (bool, error) {
+	if s.exists == nil {
+		panic("unexpected username lookup")
+	}
+	return s.exists(ctx, username)
 }
 
 func validOnboarding() Onboarding {
@@ -140,5 +164,63 @@ func TestCompleteOnboardingPassesStoreErrorsThrough(t *testing.T) {
 	})
 	if _, err := service.CompleteOnboarding(t.Context(), "uid", validOnboarding()); !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("got %v, want ErrUsernameTaken", err)
+	}
+}
+
+func TestUpdateProfileRequiresCompletedOnboarding(t *testing.T) {
+	input := ProfileUpdate{DisplayName: "지수", Username: "jisu_01", DefaultVisibility: "hidden"}
+	for _, tt := range []struct {
+		name    string
+		readErr error
+		want    error
+	}{
+		{"not onboarded", nil, ErrOnboardingRequired},
+		{"unregistered", ErrNotFound, ErrNotFound},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			service := NewService(storeStub{
+				update: func(context.Context, string, ProfileUpdate) (Profile, error) { return Profile{}, ErrNotFound },
+				get:    func(context.Context, string) (Profile, error) { return Profile{}, tt.readErr },
+			})
+			if _, err := service.UpdateProfile(t.Context(), "uid", input); !errors.Is(err, tt.want) {
+				t.Fatalf("got %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateProfileRejectsPhotoRemovalWithNewPhoto(t *testing.T) {
+	path := "users/uid/profile/avatar.jpg"
+	input := ProfileUpdate{
+		DisplayName: "지수", Username: "jisu_01", DefaultVisibility: "hidden",
+		PhotoStoragePath: &path, RemovePhoto: true,
+	}
+	if _, err := NewService(storeStub{}).UpdateProfile(t.Context(), "uid", input); !errors.Is(err, ErrInvalidProfile) {
+		t.Fatalf("got %v, want ErrInvalidProfile", err)
+	}
+}
+
+func TestUpdateCalendarImportRejectsUnknownStatus(t *testing.T) {
+	_, err := NewService(storeStub{}).UpdateCalendarImport(t.Context(), "uid", CalendarImport{PermissionStatus: "maybe"})
+	if !errors.Is(err, ErrInvalidProfile) {
+		t.Fatalf("got %v, want ErrInvalidProfile", err)
+	}
+}
+
+func TestUsernameAvailableNormalizesBeforeLookup(t *testing.T) {
+	service := NewService(storeStub{
+		exists: func(_ context.Context, username string) (bool, error) {
+			if username != "jisu_01" {
+				t.Fatalf("lookup was not normalized: %q", username)
+			}
+			return true, nil
+		},
+	})
+	available, err := service.UsernameAvailable(t.Context(), " Jisu_01 ")
+	if err != nil || available {
+		t.Fatalf("got available=%v err=%v", available, err)
+	}
+	if _, err := NewService(storeStub{}).UsernameAvailable(t.Context(), "a!"); !errors.Is(err, ErrInvalidProfile) {
+		t.Fatalf("got %v, want ErrInvalidProfile", err)
 	}
 }

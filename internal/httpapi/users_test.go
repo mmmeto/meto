@@ -23,9 +23,12 @@ func (f verifierFunc) Verify(ctx context.Context, token string) (auth.Identity, 
 }
 
 type userServiceStub struct {
-	sync    func(context.Context, user.Login) (user.Profile, error)
-	get     func(context.Context, string) (user.Profile, error)
-	onboard func(context.Context, string, user.Onboarding) (user.Profile, error)
+	sync      func(context.Context, user.Login) (user.Profile, error)
+	get       func(context.Context, string) (user.Profile, error)
+	onboard   func(context.Context, string, user.Onboarding) (user.Profile, error)
+	update    func(context.Context, string, user.ProfileUpdate) (user.Profile, error)
+	calendar  func(context.Context, string, user.CalendarImport) (user.Profile, error)
+	available func(context.Context, string) (bool, error)
 }
 
 func (s userServiceStub) SyncLogin(ctx context.Context, input user.Login) (user.Profile, error) {
@@ -47,6 +50,27 @@ func (s userServiceStub) CompleteOnboarding(ctx context.Context, id string, inpu
 		panic("unexpected onboarding")
 	}
 	return s.onboard(ctx, id, input)
+}
+
+func (s userServiceStub) UpdateProfile(ctx context.Context, id string, input user.ProfileUpdate) (user.Profile, error) {
+	if s.update == nil {
+		panic("unexpected profile update")
+	}
+	return s.update(ctx, id, input)
+}
+
+func (s userServiceStub) UpdateCalendarImport(ctx context.Context, id string, input user.CalendarImport) (user.Profile, error) {
+	if s.calendar == nil {
+		panic("unexpected calendar update")
+	}
+	return s.calendar(ctx, id, input)
+}
+
+func (s userServiceStub) UsernameAvailable(ctx context.Context, username string) (bool, error) {
+	if s.available == nil {
+		panic("unexpected username lookup")
+	}
+	return s.available(ctx, username)
 }
 
 func newStatusRouter(db Pinger) (*gin.Engine, error) {
@@ -73,6 +97,8 @@ func TestProtectedRoutesRejectBadAuthorization(t *testing.T) {
 		{http.MethodPost, "/api/v1/auth/login"},
 		{http.MethodGet, "/api/v1/users/me"},
 		{http.MethodPost, "/api/v1/users/me/onboarding"},
+		{http.MethodPut, "/api/v1/users/me"},
+		{http.MethodPut, "/api/v1/users/me/calendar-import"},
 	} {
 		for _, header := range []string{"", "Basic abc", "Bearer", "Bearer a b", "Bearer " + strings.Repeat("x", 17000), "Bearer invalid"} {
 			router := userTestRouter(t, verifierFunc(func(context.Context, string) (auth.Identity, error) {
@@ -273,5 +299,31 @@ func TestAuthenticationPropagatesRequestCancellation(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("canceled verification: got %d, want 503", response.Code)
+	}
+}
+
+func TestCalendarImportRequiresBothFields(t *testing.T) {
+	router := userTestRouter(t, verifierFunc(validVerifier), userServiceStub{})
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/users/me/calendar-import",
+		strings.NewReader(`{"calendarPermissionStatus":"granted"}`))
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", response.Code)
+	}
+}
+
+func TestUsernameAvailabilityNeedsNoToken(t *testing.T) {
+	router := userTestRouter(t, verifierFunc(func(context.Context, string) (auth.Identity, error) {
+		t.Fatal("availability must not verify a token")
+		return auth.Identity{}, nil
+	}), userServiceStub{
+		available: func(_ context.Context, username string) (bool, error) { return username == "free_id", nil },
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/usernames/free_id/availability", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"available":true`) {
+		t.Fatalf("unexpected response: %d %s", response.Code, response.Body.String())
 	}
 }

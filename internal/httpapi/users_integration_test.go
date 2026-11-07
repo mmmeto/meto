@@ -155,7 +155,6 @@ func TestUserAPIWithPostgres(t *testing.T) {
 		t.Fatal("failed onboarding must not change the profile")
 	}
 
-	// 같은 사용자명을 두고 경쟁하면 한 명만 성공하고, 나머지는 500이 아닌 409를 받아야 합니다.
 	const racers = 8
 	statuses := make(chan int, racers)
 	for i := range racers {
@@ -183,7 +182,6 @@ func TestUserAPIWithPostgres(t *testing.T) {
 		t.Fatalf("username race winners = %d, want 1", wins)
 	}
 
-	// 같은 사용자의 중복 요청은 재시도이므로 모두 성공해야 합니다.
 	readProfile(request(http.MethodPost, "/api/v1/auth/login", "user-f", ""))
 	repeats := make(chan int, racers)
 	for range racers {
@@ -199,5 +197,56 @@ func TestUserAPIWithPostgres(t *testing.T) {
 		if status != http.StatusOK {
 			t.Errorf("repeated onboarding status = %d, want 200", status)
 		}
+	}
+
+	checkAvailable := func(username string, want bool) {
+		t.Helper()
+		response := request(http.MethodGet, "/api/v1/usernames/"+username+"/availability", "", "")
+		if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "true") != want {
+			t.Fatalf("availability of %s: %d %s", username, response.Code, response.Body.String())
+		}
+	}
+	checkAvailable("jisu_01", false)
+	checkAvailable("JISU_01", false)
+	checkAvailable("nobody_here", true)
+
+	profilePut := func(token, body string) *httptest.ResponseRecorder {
+		return request(http.MethodPut, "/api/v1/users/me", token, body)
+	}
+	if got := profilePut("user-e", `{"displayName":"이름","username":"edit_early","defaultVisibility":"hidden"}`); got.Code != http.StatusConflict ||
+		!strings.Contains(got.Body.String(), "onboarding_required") {
+		t.Fatalf("update before onboarding: %d %s", got.Code, got.Body.String())
+	}
+	if got := profilePut("user-unregistered", `{"displayName":"이름","username":"edit_none","defaultVisibility":"hidden"}`).Code; got != http.StatusNotFound {
+		t.Fatalf("update unregistered = %d, want 404", got)
+	}
+	edited := readProfile(profilePut("user-d", `{"displayName":"새 이름","username":"jisu_new","defaultVisibility":"full_visible"}`))
+	if edited.DisplayName != "새 이름" || edited.Username != "jisu_new" || edited.DefaultVisibility != "full_visible" ||
+		edited.PhotoStoragePath == nil || edited.TermsAcceptedVersion == nil {
+		t.Fatalf("unexpected edited profile: %+v", edited)
+	}
+	checkAvailable("jisu_01", true)
+	if got := profilePut("user-d", `{"displayName":"새 이름","username":"race_winner","defaultVisibility":"hidden"}`); got.Code != http.StatusConflict ||
+		!strings.Contains(got.Body.String(), "username_taken") {
+		t.Fatalf("taken username on update: %d %s", got.Code, got.Body.String())
+	}
+	readProfile(profilePut("user-d", `{"displayName":"새 이름","username":"jisu_new","defaultVisibility":"hidden"}`))
+	removed := readProfile(profilePut("user-d", `{"displayName":"새 이름","username":"jisu_new","defaultVisibility":"hidden","removePhoto":true}`))
+	if removed.PhotoStoragePath != nil || removed.PhotoURL != nil {
+		t.Fatalf("photo was not removed: %+v", removed)
+	}
+	if again := readProfile(request(http.MethodPost, "/api/v1/auth/login", "user-d", "")); again.PhotoURL != nil {
+		t.Fatalf("login restored a removed photo: %+v", again)
+	}
+
+	calendar := readProfile(request(http.MethodPut, "/api/v1/users/me/calendar-import", "user-e",
+		`{"calendarPermissionStatus":"granted","hasImportedDeviceCalendar":true}`))
+	if calendar.CalendarPermissionStatus != "granted" || !calendar.HasImportedDeviceCalendar {
+		t.Fatalf("unexpected calendar state: %+v", calendar)
+	}
+	calendar = readProfile(request(http.MethodPut, "/api/v1/users/me/calendar-import", "user-e",
+		`{"calendarPermissionStatus":"denied","hasImportedDeviceCalendar":false}`))
+	if calendar.CalendarPermissionStatus != "denied" || calendar.HasImportedDeviceCalendar {
+		t.Fatalf("calendar state was not cleared: %+v", calendar)
 	}
 }

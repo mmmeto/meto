@@ -23,6 +23,9 @@ type UserService interface {
 	SyncLogin(context.Context, user.Login) (user.Profile, error)
 	GetByID(context.Context, string) (user.Profile, error)
 	CompleteOnboarding(context.Context, string, user.Onboarding) (user.Profile, error)
+	UpdateProfile(context.Context, string, user.ProfileUpdate) (user.Profile, error)
+	UpdateCalendarImport(context.Context, string, user.CalendarImport) (user.Profile, error)
+	UsernameAvailable(context.Context, string) (bool, error)
 }
 
 type onboardingRequest struct {
@@ -31,6 +34,19 @@ type onboardingRequest struct {
 	DefaultVisibility string  `json:"defaultVisibility"`
 	TermsVersion      string  `json:"termsVersion"`
 	PhotoStoragePath  *string `json:"photoStoragePath"`
+}
+
+type profileUpdateRequest struct {
+	DisplayName       string  `json:"displayName"`
+	Username          string  `json:"username"`
+	DefaultVisibility string  `json:"defaultVisibility"`
+	PhotoStoragePath  *string `json:"photoStoragePath"`
+	RemovePhoto       bool    `json:"removePhoto"`
+}
+
+type calendarImportRequest struct {
+	CalendarPermissionStatus  string `json:"calendarPermissionStatus"`
+	HasImportedDeviceCalendar *bool  `json:"hasImportedDeviceCalendar"`
 }
 
 func authenticate(verifier auth.Verifier) gin.HandlerFunc {
@@ -75,8 +91,6 @@ func apiError(c *gin.Context, status int, code, message string) {
 	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code, "message": message}})
 }
 
-// userError는 사용자 도메인 오류를 HTTP 응답으로 바꾸는 유일한 지점입니다.
-// 알 수 없는 오류의 내용은 로그에만 남기고 unavailable 문구로 응답합니다.
 func userError(c *gin.Context, err error, unavailable string) {
 	switch {
 	case errors.Is(err, user.ErrNotFound):
@@ -89,6 +103,8 @@ func userError(c *gin.Context, err error, unavailable string) {
 		apiError(c, http.StatusConflict, "onboarding_completed", "이미 온보딩을 완료했어요.")
 	case errors.Is(err, user.ErrTermsOutdated):
 		apiError(c, http.StatusConflict, "terms_outdated", "최신 약관에 다시 동의해주세요.")
+	case errors.Is(err, user.ErrOnboardingRequired):
+		apiError(c, http.StatusConflict, "onboarding_required", "온보딩을 먼저 완료해주세요.")
 	default:
 		log.Printf("%s %s: %v", c.Request.Method, c.FullPath(), err)
 		apiError(c, http.StatusServiceUnavailable, "database_unavailable", unavailable)
@@ -149,5 +165,68 @@ func onboardingHandler(users UserService) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, profile)
+	}
+}
+
+func updateProfileHandler(users UserService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		identity := c.MustGet(identityKey).(auth.Identity)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxProfileBodySize)
+		var request profileUpdateRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			userError(c, user.ErrInvalidProfile, "")
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		profile, err := users.UpdateProfile(ctx, identity.ID, user.ProfileUpdate{
+			DisplayName:       request.DisplayName,
+			Username:          request.Username,
+			DefaultVisibility: request.DefaultVisibility,
+			PhotoStoragePath:  request.PhotoStoragePath,
+			RemovePhoto:       request.RemovePhoto,
+		})
+		if err != nil {
+			userError(c, err, "프로필을 저장하지 못했어요.")
+			return
+		}
+		c.JSON(http.StatusOK, profile)
+	}
+}
+
+func calendarImportHandler(users UserService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		identity := c.MustGet(identityKey).(auth.Identity)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxProfileBodySize)
+		var request calendarImportRequest
+		if err := c.ShouldBindJSON(&request); err != nil || request.HasImportedDeviceCalendar == nil {
+			userError(c, user.ErrInvalidProfile, "")
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		profile, err := users.UpdateCalendarImport(ctx, identity.ID, user.CalendarImport{
+			PermissionStatus: request.CalendarPermissionStatus,
+			HasImported:      *request.HasImportedDeviceCalendar,
+		})
+		if err != nil {
+			userError(c, err, "캘린더 상태를 저장하지 못했어요.")
+			return
+		}
+		c.JSON(http.StatusOK, profile)
+	}
+}
+
+func usernameAvailabilityHandler(users UserService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		available, err := users.UsernameAvailable(ctx, c.Param("username"))
+		if err != nil {
+			userError(c, err, "사용자 ID를 확인하지 못했어요.")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"available": available})
 	}
 }

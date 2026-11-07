@@ -9,6 +9,9 @@ type Store interface {
 	SyncLogin(context.Context, Login) (Profile, error)
 	GetByID(context.Context, string) (Profile, error)
 	CompleteOnboarding(context.Context, string, Onboarding) (Profile, error)
+	UpdateProfile(context.Context, string, ProfileUpdate) (Profile, error)
+	UpdateCalendarImport(context.Context, string, CalendarImport) (Profile, error)
+	UsernameExists(context.Context, string) (bool, error)
 }
 
 type Service struct {
@@ -47,4 +50,37 @@ func (s *Service) CompleteOnboarding(ctx context.Context, id string, input Onboa
 		return Profile{}, ErrOnboardingCompleted
 	}
 	return existing, nil
+}
+
+func (s *Service) UpdateProfile(ctx context.Context, id string, input ProfileUpdate) (Profile, error) {
+	input, err := input.normalized(id)
+	if err != nil {
+		return Profile{}, err
+	}
+	profile, err := s.store.UpdateProfile(ctx, id, input)
+	if !errors.Is(err, ErrNotFound) {
+		return profile, err
+	}
+
+	// 갱신된 행이 없으면 미등록이거나 아직 온보딩 전인 사용자입니다.
+	if _, err := s.store.GetByID(ctx, id); err != nil {
+		return Profile{}, err
+	}
+	return Profile{}, ErrOnboardingRequired
+}
+
+func (s *Service) UpdateCalendarImport(ctx context.Context, id string, input CalendarImport) (Profile, error) {
+	if err := input.validate(); err != nil {
+		return Profile{}, err
+	}
+	return s.store.UpdateCalendarImport(ctx, id, input)
+}
+
+func (s *Service) UsernameAvailable(ctx context.Context, raw string) (bool, error) {
+	username, err := normalizeUsername(raw)
+	if err != nil {
+		return false, err
+	}
+	exists, err := s.store.UsernameExists(ctx, username)
+	return !exists, err
 }

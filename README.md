@@ -132,8 +132,10 @@ SQL 파일의 `-- +goose Down`에는 되돌릴 SQL을 기록하지만 현재 실
 | `POST /api/v1/auth/login` | 검증된 UID로 사용자 생성 또는 로그인 정보 갱신 후 프로필 반환 |
 | `GET /api/v1/users/me` | 검증된 UID에 해당하는 PostgreSQL 프로필 조회 |
 | `POST /api/v1/users/me/onboarding` | 이름·사용자명·공개 범위·약관 동의를 저장하고 온보딩 완료 |
+| `PUT /api/v1/users/me` | 온보딩을 마친 사용자의 프로필 수정 |
+| `PUT /api/v1/users/me/calendar-import` | 캘린더 권한과 가져오기 연결 상태 저장 |
 
-세 API 모두 다음 헤더가 필요합니다.
+위 API는 모두 다음 헤더가 필요합니다.
 
 ```text
 Authorization: Bearer <Firebase ID token>
@@ -217,6 +219,49 @@ curl -X POST http://localhost:8080/api/v1/users/me/onboarding \
 | 409 | `onboarding_completed` | 이미 다른 사용자명으로 온보딩 완료 |
 | 409 | `terms_outdated` | 서버의 최신 약관 버전과 다름 |
 | 503 | `database_unavailable` | DB 처리 실패 |
+
+## 프로필 수정 API
+
+`PUT /api/v1/users/me`는 온보딩과 같은 입력 규칙을 적용하며 `displayName`, `username`, `defaultVisibility`가 필수입니다.
+약관 동의 정보는 변경하지 않습니다.
+
+`photoStoragePath`를 생략하면 기존 사진을 유지합니다. 사진을 지우려면 `"removePhoto":true`를 보내며,
+이때 `photo_url`과 `photo_storage_path`를 함께 비웁니다. `removePhoto`와 `photoStoragePath`는 같이 보낼 수 없습니다.
+지운 사진은 재로그인해도 Firebase 프로필 사진으로 되돌아가지 않습니다.
+
+| 상태 코드 | `error.code` | 의미 |
+| --- | --- | --- |
+| 200 | | 수정 성공 |
+| 400 | `invalid_profile` | 본문 형식 오류 또는 입력 규칙 위반 |
+| 404 | `user_not_found` | 로그인 API로 등록하지 않은 사용자 |
+| 409 | `username_taken` | 다른 사용자가 쓰는 사용자명 |
+| 409 | `onboarding_required` | 온보딩을 마치지 않은 사용자 |
+
+## 캘린더 상태 API
+
+`PUT /api/v1/users/me/calendar-import`의 두 필드는 모두 필수입니다.
+
+```json
+{"calendarPermissionStatus":"granted","hasImportedDeviceCalendar":true}
+```
+
+`calendarPermissionStatus`는 `unknown`, `granted`, `denied` 중 하나입니다.
+
+## 사용자명 확인 API
+
+로그인 전에 호출하므로 토큰이 필요하지 않습니다. 입력은 온보딩과 같이 정리한 뒤 확인합니다.
+
+```bash
+curl http://localhost:8080/api/v1/usernames/jisu_01/availability
+```
+
+```json
+{"available":true}
+```
+
+형식이 맞지 않으면 400 `invalid_profile`을 반환합니다.
+본인이 쓰는 사용자명도 `false`로 응답하므로, 프로필 수정 화면은 값이 바뀌지 않았으면 호출하지 않습니다.
+요청 횟수 제한은 아직 없으며, 프록시 구성이 정해지는 배포 시점에 추가해야 합니다.
 
 ## 오류 응답
 

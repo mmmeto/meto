@@ -75,7 +75,6 @@ func (r *Repository) GetByID(ctx context.Context, id string) (Profile, error) {
 	return scanProfile(r.pool.QueryRow(ctx, "SELECT "+profileColumns+" FROM users WHERE id = $1", id))
 }
 
-// CompleteOnboarding은 온보딩 전인 사용자만 갱신하며, 해당 행이 없으면 ErrNotFound를 반환합니다.
 // 사용자명 중복은 조회 후 저장하지 않고 UNIQUE 제약으로 판정해 동시 요청에도 한 명만 성공합니다.
 func (r *Repository) CompleteOnboarding(ctx context.Context, id string, input Onboarding) (Profile, error) {
 	profile, err := scanProfile(r.pool.QueryRow(ctx, `
@@ -92,11 +91,47 @@ func (r *Repository) CompleteOnboarding(ctx context.Context, id string, input On
 		RETURNING `+profileColumns,
 		id, input.DisplayName, input.Username, input.DefaultVisibility,
 		input.PhotoStoragePath, input.TermsVersion))
+	return profile, usernameConflict(err)
+}
+
+func (r *Repository) UpdateProfile(ctx context.Context, id string, input ProfileUpdate) (Profile, error) {
+	profile, err := scanProfile(r.pool.QueryRow(ctx, `
+		UPDATE users SET
+			display_name = $2,
+			username = $3,
+			default_visibility = $4,
+			photo_url = CASE WHEN $6 THEN NULL ELSE photo_url END,
+			photo_storage_path = CASE WHEN $6 THEN NULL ELSE COALESCE($5, photo_storage_path) END,
+			updated_at = NOW()
+		WHERE id = $1 AND onboarding_completed
+		RETURNING `+profileColumns,
+		id, input.DisplayName, input.Username, input.DefaultVisibility,
+		input.PhotoStoragePath, input.RemovePhoto))
+	return profile, usernameConflict(err)
+}
+
+func (r *Repository) UpdateCalendarImport(ctx context.Context, id string, input CalendarImport) (Profile, error) {
+	return scanProfile(r.pool.QueryRow(ctx, `
+		UPDATE users SET
+			calendar_permission_status = $2,
+			has_imported_device_calendar = $3,
+			updated_at = NOW()
+		WHERE id = $1
+		RETURNING `+profileColumns, id, input.PermissionStatus, input.HasImported))
+}
+
+func (r *Repository) UsernameExists(ctx context.Context, username string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM users WHERE username = $1)", username).Scan(&exists)
+	return exists, err
+}
+
+func usernameConflict(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == uniqueViolationCode && pgErr.ConstraintName == usernameUniqueConstraint {
-		return Profile{}, ErrUsernameTaken
+		return ErrUsernameTaken
 	}
-	return profile, err
+	return err
 }
 
 func scanProfile(row pgx.Row) (Profile, error) {
