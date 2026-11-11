@@ -76,12 +76,12 @@ func (s userServiceStub) UsernameAvailable(ctx context.Context, username string)
 func newStatusRouter(db Pinger) (*gin.Engine, error) {
 	return NewRouter(db, verifierFunc(func(context.Context, string) (auth.Identity, error) {
 		return auth.Identity{}, auth.ErrInvalidToken
-	}), userServiceStub{})
+	}), userServiceStub{}, friendServiceStub{})
 }
 
 func userTestRouter(t *testing.T, verifier auth.Verifier, users UserService) *gin.Engine {
 	t.Helper()
-	router, err := NewRouter(pingerFunc(func(context.Context) error { return nil }), verifier, users)
+	router, err := NewRouter(pingerFunc(func(context.Context) error { return nil }), verifier, users, friendServiceStub{})
 	if err != nil {
 		t.Fatal(err)
 	}

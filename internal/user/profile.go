@@ -45,7 +45,7 @@ type CalendarImport struct {
 	HasImported      bool
 }
 
-func normalizeUsername(raw string) (string, error) {
+func NormalizeUsername(raw string) (string, error) {
 	username := strings.ToLower(strings.TrimSpace(raw))
 	if !usernamePattern.MatchString(username) {
 		return "", ErrInvalidProfile
@@ -60,14 +60,12 @@ func normalizeProfile(userID, rawName, rawUsername, visibility string, photoPath
 	if nameLength == 0 || nameLength > maxDisplayNameLength || strings.ContainsFunc(displayName, unicode.IsControl) {
 		return "", "", ErrInvalidProfile
 	}
-	username, err := normalizeUsername(rawUsername)
+	username, err := NormalizeUsername(rawUsername)
 	if err != nil {
 		return "", "", err
 	}
 
-	switch visibility {
-	case "hidden", "time_only", "title_visible", "full_visible":
-	default:
+	if !ValidVisibility(visibility) {
 		return "", "", ErrInvalidProfile
 	}
 
@@ -77,6 +75,15 @@ func normalizeProfile(userID, rawName, rawUsername, visibility string, photoPath
 	}
 
 	return displayName, username, nil
+}
+
+func ValidVisibility(visibility string) bool {
+	switch visibility {
+	case "hidden", "time_only", "title_visible", "full_visible":
+		return true
+	default:
+		return false
+	}
 }
 
 func (o Onboarding) normalized(userID string) (Onboarding, error) {

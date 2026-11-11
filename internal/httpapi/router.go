@@ -15,9 +15,9 @@ type Pinger interface {
 	Ping(context.Context) error
 }
 
-func NewRouter(db Pinger, verifier auth.Verifier, users UserService) (*gin.Engine, error) {
-	if db == nil || verifier == nil || users == nil {
-		return nil, fmt.Errorf("database, auth verifier and user service are required")
+func NewRouter(db Pinger, verifier auth.Verifier, users UserService, friends FriendService) (*gin.Engine, error) {
+	if db == nil || verifier == nil || users == nil || friends == nil {
+		return nil, fmt.Errorf("database, auth verifier, user service and friend service are required")
 	}
 	router := gin.Default()
 	if err := router.SetTrustedProxies(nil); err != nil {
@@ -56,5 +56,19 @@ func NewRouter(db Pinger, verifier auth.Verifier, users UserService) (*gin.Engin
 	protected.PUT("/users/me", updateProfileHandler(users))
 	protected.POST("/users/me/onboarding", onboardingHandler(users))
 	protected.PUT("/users/me/calendar-import", calendarImportHandler(users))
+	protected.GET("/users/search", searchUserHandler(friends))
+
+	protected.GET("/friends", listFriendsHandler(friends))
+	protected.PUT("/friends/:userId/sharing-level", sharingLevelHandler(friends))
+
+	protected.POST("/friend-requests", sendRequestHandler(friends))
+	protected.GET("/friend-requests/received", receivedRequestsHandler(friends))
+	protected.GET("/friend-requests/sent", sentRequestsHandler(friends))
+	protected.POST("/friend-requests/:requestId/accept", acceptRequestHandler(friends))
+	protected.POST("/friend-requests/:requestId/reject", rejectRequestHandler(friends))
+
+	protected.GET("/blocks", listBlockedHandler(friends))
+	protected.PUT("/blocks/:userId", blockHandler(friends))
+	protected.DELETE("/blocks/:userId", unblockHandler(friends))
 	return router, nil
 }

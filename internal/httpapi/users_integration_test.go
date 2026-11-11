@@ -38,7 +38,7 @@ func TestUserAPIWithPostgres(t *testing.T) {
 		email := "same-address@example.test"
 		return auth.Identity{ID: token, DisplayName: "Provider Name", Email: &email}, nil
 	})
-	router, err := NewRouter(pool, verifier, user.NewService(user.NewRepository(pool)))
+	router, err := NewRouter(pool, verifier, user.NewService(user.NewRepository(pool)), friendServiceStub{})
 	if err != nil {
 		t.Fatal(err)
 	}

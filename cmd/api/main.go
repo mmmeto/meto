@@ -14,6 +14,7 @@ import (
 	"meto/internal/auth"
 	"meto/internal/config"
 	"meto/internal/database"
+	"meto/internal/friend"
 	"meto/internal/httpapi"
 	"meto/internal/user"
 )
@@ -47,7 +48,12 @@ func run(ctx context.Context) error {
 	defer pool.Close()
 	log.Print("database connected")
 
-	router, err := httpapi.NewRouter(pool, verifier, user.NewService(user.NewRepository(pool)))
+	router, err := httpapi.NewRouter(
+		pool,
+		verifier,
+		user.NewService(user.NewRepository(pool)),
+		friend.NewService(friend.NewRepository(pool)),
+	)
 	if err != nil {
 		return err
 	}

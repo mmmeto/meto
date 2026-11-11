@@ -77,7 +77,7 @@ func (s *Service) UpdateCalendarImport(ctx context.Context, id string, input Cal
 }
 
 func (s *Service) UsernameAvailable(ctx context.Context, raw string) (bool, error) {
-	username, err := normalizeUsername(raw)
+	username, err := NormalizeUsername(raw)
 	if err != nil {
 		return false, err
 	}

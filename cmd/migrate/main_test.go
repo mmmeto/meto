@@ -68,7 +68,6 @@ func TestMigrations(t *testing.T) {
 	if err := migrate(ctx, testURL, "up", migrations); err != nil {
 		t.Fatal(err)
 	}
-	// 재실행 시 CREATE TABLE을 다시 실행하지 않고 이미 적용한 변경을 건너뛰어야 합니다.
 	if err := migrate(ctx, testURL, "up", migrations); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +89,6 @@ func TestMigrations(t *testing.T) {
 	if visibility != "time_only" || permission != "unknown" || completed {
 		t.Fatalf("unexpected defaults: %q %q %v", visibility, permission, completed)
 	}
-	// 프로필 설정 전에는 여러 사용자가 사용자명 없이 대기할 수 있어야 합니다.
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id) VALUES ('pending-user')`); err != nil {
 		t.Fatal(err)
 	}
@@ -118,18 +116,28 @@ func TestMigrations(t *testing.T) {
 		})
 	}
 
-	initialSQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "00001_create_users.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	broken := fstest.MapFS{
-		"00001_create_users.sql": &fstest.MapFile{Data: initialSQL},
-		"00002_failure.sql": &fstest.MapFile{Data: []byte(`-- +goose Up
+		"99999_failure.sql": &fstest.MapFile{Data: []byte(`-- +goose Up
 CREATE TABLE rollback_probe(id INT);
 SELECT 1 / 0;
 -- +goose Down
 DROP TABLE rollback_probe;
 `)},
+	}
+	applied, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range applied {
+		sql, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		broken[filepath.Base(path)] = &fstest.MapFile{Data: sql}
+	}
+	var versionBefore int64
+	if err := pool.QueryRow(ctx, "SELECT MAX(version_id) FROM goose_db_version").Scan(&versionBefore); err != nil {
+		t.Fatal(err)
 	}
 	if err := migrate(ctx, testURL, "up", broken); err == nil {
 		t.Fatal("broken migration must fail")
@@ -145,7 +153,7 @@ DROP TABLE rollback_probe;
 	if err := pool.QueryRow(ctx, "SELECT MAX(version_id) FROM goose_db_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 1 {
-		t.Fatalf("database version = %d after rollback, want 1", version)
+	if version != versionBefore {
+		t.Fatalf("database version = %d after rollback, want %d", version, versionBefore)
 	}
 }

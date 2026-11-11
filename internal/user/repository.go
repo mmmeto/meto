@@ -35,6 +35,16 @@ type Profile struct {
 	UpdatedAt                 time.Time  `json:"updatedAt"`
 }
 
+type PublicProfile struct {
+	ID               string    `json:"id"`
+	Username         string    `json:"username"`
+	DisplayName      string    `json:"displayName"`
+	PhotoURL         *string   `json:"photoURL"`
+	PhotoStoragePath *string   `json:"photoStoragePath"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
 type Login struct {
 	ID          string
 	Email       *string
